@@ -45,6 +45,11 @@ _ENVIRONMENT_REGISTRY: dict[EnvironmentType, _EnvEntry] = {
         "DaytonaEnvironment",
         "daytona",
     ),
+    EnvironmentType.SKYPILOT: _EnvEntry(
+        "pier.environments.skypilot",
+        "SkypilotEnvironment",
+        "skypilot",
+    ),
 }
 
 

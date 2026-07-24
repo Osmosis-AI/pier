@@ -8,6 +8,7 @@ import uuid
 import warnings
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
+from functools import cached_property
 from pathlib import Path, PurePath, PurePosixPath
 from typing import Literal
 
@@ -17,6 +18,7 @@ from pier.environments.capabilities import (
     EnvironmentCapabilities,
     EnvironmentResourceCapabilities,
 )
+from pier.environments.definition import environment_content_hash
 from pier.environments.resource_policies import (
     validate_resource_capabilities,
     validate_resource_values,
@@ -127,6 +129,19 @@ class BaseEnvironment(ABC):
         self._validate_internet_config()
         self._validate_agent_setup_options()
         self._validate_windows_support()
+
+    @cached_property
+    def environment_id(self) -> str:
+        """Stable content identity for this environment definition.
+
+        Use this when linking, caching, or tagging a specific environment
+        build across systems. Use ``environment_name`` for the human-readable
+        task/environment handle.
+        """
+        return environment_content_hash(
+            self.environment_dir,
+            docker_image=self.task_env_config.docker_image,
+        )
 
     @property
     def _uses_compose(self) -> bool:
