@@ -29,6 +29,7 @@ from pier.environments.skypilot import (
 from pier.models.agent.network import NetworkAllowlist
 from pier.models.environment_type import EnvironmentType
 from pier.models.task.config import EnvironmentConfig
+from pier.models.agent.install import AgentInstallSpec, InstallStep
 from pier.models.trial.paths import TrialPaths
 
 
@@ -720,3 +721,84 @@ def _async_fail(message):
         raise AssertionError(message)
 
     return _fn
+
+
+def _install_spec(agent_name: str = "codex") -> AgentInstallSpec:
+    return AgentInstallSpec(
+        agent_name=agent_name,
+        steps=[InstallStep(run=f"npm i -g {agent_name}", user="root")],
+    )
+
+
+def test_image_tag_varies_with_the_installed_agent(fake_sky, tmp_path):
+    """A tag keyed only on the environment would serve one agent's image to another."""
+    plain = _make_env(tmp_path)._image_ref
+    codex = _make_env(tmp_path, agent_install_spec=_install_spec("codex"))._image_ref
+    claude = _make_env(
+        tmp_path, agent_install_spec=_install_spec("claude-code")
+    )._image_ref
+    assert plain != codex
+    assert codex != claude
+
+
+def test_build_context_layers_the_agent_onto_the_task_dockerfile(fake_sky, tmp_path):
+    env = _make_env(tmp_path, agent_install_spec=_install_spec())
+    context_dir, dockerfile = env._agent_build_context()
+    body = dockerfile.read_text()
+    assert "FROM ubuntu:24.04" in body
+    assert "npm i -g codex" in body
+    # The task's own files travel with the generated Dockerfile.
+    assert (context_dir / "Dockerfile").exists()
+
+
+def test_build_context_layers_the_agent_onto_a_prebuilt_image(fake_sky, tmp_path):
+    env = _make_env(
+        tmp_path,
+        dockerfile=None,
+        docker_image="ghcr.io/acme/task:1.0",
+        agent_install_spec=_install_spec(),
+    )
+    body = env._agent_build_context()[1].read_text()
+    assert "FROM ghcr.io/acme/task:1.0" in body
+    assert "npm i -g codex" in body
+
+
+@pytest.mark.asyncio
+async def test_prebuilt_image_is_rebuilt_when_an_agent_must_be_installed(
+    fake_sky, tmp_path, monkeypatch
+):
+    env = _make_env(
+        tmp_path,
+        dockerfile=None,
+        docker_image="ghcr.io/acme/task:1.0",
+        agent_install_spec=_install_spec(),
+    )
+    built = []
+    monkeypatch.setattr(env, "_image_exists", _async_return(False))
+    monkeypatch.setattr(
+        env, "_build_and_push_image", _async_record(built)
+    )
+    resolved = await env._resolve_image(force_build=False)
+    assert built, "the prebuilt image was used verbatim, skipping the agent install"
+    assert resolved == env._image_ref
+
+
+@pytest.mark.asyncio
+async def test_pool_rejects_a_build_time_agent_install(fake_sky, tmp_path):
+    env = _make_env(tmp_path, pool="warm-1", agent_install_spec=_install_spec())
+    with pytest.raises(ValueError, match="warm pool supplies its own image"):
+        await env._resolve_image(force_build=False)
+
+
+def _async_return(value):
+    async def _inner(*_a, **_k):
+        return value
+
+    return _inner
+
+
+def _async_record(sink):
+    async def _inner(*_a, **_k):
+        sink.append(True)
+
+    return _inner

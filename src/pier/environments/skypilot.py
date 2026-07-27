@@ -11,6 +11,7 @@ import inspect
 import os
 import re
 import shlex
+import shutil
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -21,6 +22,7 @@ from tenacity import (
     wait_exponential,
 )
 
+from pier.environments.agent_setup import write_agent_dockerfile
 from pier.environments.base import BaseEnvironment, ExecResult
 from pier.environments.capabilities import (
     EnvironmentCapabilities,
@@ -243,7 +245,11 @@ class SkypilotEnvironment(BaseEnvironment):
                 "[environment].docker_image or a warm 'pool'."
             )
         repo = _sanitize_image_repo(self.environment_name)
-        return f"{self._registry.rstrip('/')}/{repo}:{self.environment_id}"
+        tag = self.environment_id
+        install = self.agent_install_spec
+        if install is not None:
+            tag = f"{tag}-agent-{install.fingerprint()}"
+        return f"{self._registry.rstrip('/')}/{repo}:{tag}"
 
     # ── image build + push ────────────────────────────────────────────────
 
@@ -265,9 +271,38 @@ class SkypilotEnvironment(BaseEnvironment):
         wait=wait_exponential(multiplier=2, min=5, max=60),
         reraise=True,
     )
+    def _agent_build_context(self) -> tuple[Path, Path]:
+        """Build context and Dockerfile that install the agent into the image.
+
+        Mirrors the docker environment: the task's Dockerfile (or its prebuilt
+        image) becomes the base, and the install steps are appended.
+        """
+        install = self.agent_install_spec
+        assert install is not None
+        build_dir = self.trial_paths.trial_dir / "agent-build-context"
+        if build_dir.exists():
+            shutil.rmtree(build_dir)
+        if self.task_env_config.docker_image:
+            build_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            shutil.copytree(self.environment_dir, build_dir)
+        dockerfile_path = write_agent_dockerfile(
+            build_dir=build_dir,
+            source_environment_dir=build_dir,
+            prebuilt_image_name=self.task_env_config.docker_image,
+            install=install,
+            user=self._resolve_user(None),
+        )
+        return build_dir, dockerfile_path
+
     async def _build_and_push_image(self) -> None:
         image_ref = self._image_ref
         self.logger.debug(f"Building and pushing image: {image_ref}")
+
+        if self.agent_install_spec is not None:
+            context_dir, dockerfile_path = self._agent_build_context()
+        else:
+            context_dir, dockerfile_path = self.environment_dir, self._dockerfile_path
 
         build_args = ["docker", "build"]
         if self._platform:
@@ -276,8 +311,8 @@ class SkypilotEnvironment(BaseEnvironment):
             "-t",
             image_ref,
             "-f",
-            str(self._dockerfile_path),
-            str(self.environment_dir),
+            str(dockerfile_path),
+            str(context_dir),
         ]
         build = await asyncio.create_subprocess_exec(
             *build_args,
@@ -311,8 +346,14 @@ class SkypilotEnvironment(BaseEnvironment):
         image). A prebuilt ``docker_image`` is used verbatim.
         """
         if self._pool:
+            if self.agent_install_spec is not None:
+                raise ValueError(
+                    "A warm pool supplies its own image, so the agent cannot be "
+                    "installed at build time. Drop the 'pool' kwarg to build a "
+                    "task image with the agent, or preinstall it in the pool image."
+                )
             return None
-        if self.task_env_config.docker_image:
+        if self.task_env_config.docker_image and self.agent_install_spec is None:
             return self.task_env_config.docker_image
         image_ref = self._image_ref
         if force_build or not await self._image_exists():
