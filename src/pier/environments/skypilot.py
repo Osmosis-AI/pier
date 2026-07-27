@@ -205,6 +205,7 @@ class SkypilotEnvironment(BaseEnvironment):
         # full network block are honored.
         return EnvironmentCapabilities(
             disable_internet=True,
+            preinstall_agents=True,
         )
 
     @property

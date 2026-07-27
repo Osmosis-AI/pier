@@ -264,6 +264,7 @@ def test_capabilities(fake_sky, tmp_path):
     assert caps.disable_internet is True
     assert caps.filtered_egress is False
     assert caps.gpus is False
+    assert caps.preinstall_agents is True
 
 
 def test_resource_capabilities_advertise_request_and_limit():
