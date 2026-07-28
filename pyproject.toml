@@ -41,6 +41,12 @@ dependencies = [
     "uvicorn>=0.38.0",
 ]
 
+[project.optional-dependencies]
+# The SkyPilot Sandbox SDK ('sky.sandbox') ships with the SkyPilot Platform
+# installer, not PyPI; this extra provides the base 'sky' package (preflight,
+# API-server client) and the Dockerfile WORKDIR parser.
+skypilot = ["skypilot-nightly>=0.10.0", "dockerfile-parse>=2.0.1"]
+
 [project.scripts]
 pier = "pier.cli.main:app"
 
@@ -61,6 +67,7 @@ known-first-party = ["pier"]
 
 [dependency-groups]
 dev = [
+    "dockerfile-parse>=2.0.1",
     "pytest>=9.0.3",
     "pytest-asyncio>=1.4.0",
     "ruff>=0.5",
