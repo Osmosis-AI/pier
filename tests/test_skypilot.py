@@ -285,13 +285,17 @@ def test_gpu_task_rejected(fake_sky, tmp_path):
 
 
 @run_async
-async def test_no_internet_sets_block_network(fake_sky, tmp_path):
+async def test_no_internet_does_not_block_network(fake_sky, tmp_path):
+    # no-network is not enforced by this provider: block_network is a
+    # deny-all baseline with no FQDN allow layer, so enforcing it would cut
+    # the in-sandbox agent off from its model API. Egress stays open until
+    # that layer exists.
     env = _make_env(tmp_path, allow_internet=False)
     env._image_exists = _async_return(True)
 
     await env.start(force_build=False)
 
-    assert fake_sky.create_calls[0]["block_network"] is True
+    assert fake_sky.create_calls[0]["block_network"] is False
 
 
 @run_async
@@ -304,15 +308,18 @@ async def test_public_network_does_not_block(fake_sky, tmp_path):
     assert fake_sky.create_calls[0]["block_network"] is False
 
 
-def test_network_allowlist_rejected_at_init(fake_sky, tmp_path):
-    # SkyPilot's egress control is CIDR-based, so pier's hostname allowlist
-    # is not supported: no-internet + allowlist domains must fail fast.
-    with pytest.raises(ValueError, match="Filtered inference egress"):
-        _make_env(
-            tmp_path,
-            allow_internet=False,
-            network_allowlist=NetworkAllowlist(domains=["example.com"]),
-        )
+def test_no_internet_with_allowlist_downgrades_to_open_egress(fake_sky, tmp_path):
+    # no-network + inference allowlist would fail base validation (no
+    # filtered-egress capability), and enforcing a full block would cut the
+    # in-sandbox agent off from its model API. The provider downgrades to
+    # open egress at init instead of failing fast.
+    env = _make_env(
+        tmp_path,
+        allow_internet=False,
+        network_allowlist=NetworkAllowlist(domains=["example.com"]),
+    )
+    assert env._network_unenforced is True
+    assert env.task_env_config.allow_internet is True
 
 
 # ── Image tag derivation & short-circuits ───────────────────────────────────

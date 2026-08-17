@@ -172,6 +172,20 @@ class SkypilotEnvironment(BaseEnvironment):
         self._platform = platform
         self._sandbox: Any | None = None
 
+        # SkyPilot has no per-phase FQDN allow layer (Harbor attaches
+        # FQDNNetworkPolicy objects on the sandbox cluster for that), so a
+        # no-network posture cannot coexist with the in-sandbox agent's model
+        # API access: base validation rejects the allowlisted inference
+        # domains outright, and enforcing block_network would cut the agent
+        # off from its model API. Downgrade to open egress before base
+        # validation runs — the posture every run had before network_mode
+        # resolution existed — and surface it at sandbox creation.
+        self._network_unenforced = not task_env_config.allow_internet
+        if self._network_unenforced:
+            task_env_config = task_env_config.model_copy(
+                update={"allow_internet": True}
+            )
+
         super().__init__(
             environment_dir=environment_dir,
             environment_name=environment_name,
@@ -215,6 +229,8 @@ class SkypilotEnvironment(BaseEnvironment):
         # Pier has no NetworkPolicy object; the task config's allow_internet
         # flag is the whole network posture for this environment (hostname
         # allowlists are rejected at init by _validate_agent_setup_options).
+        # Always False in practice: __init__ downgrades no-network to open
+        # egress before base validation.
         return not self.task_env_config.allow_internet
 
     @property
@@ -365,6 +381,11 @@ class SkypilotEnvironment(BaseEnvironment):
     # ── lifecycle ─────────────────────────────────────────────────────────
 
     async def _create_sandbox(self, image: str | None):
+        if self._network_unenforced:
+            self.logger.warning(
+                "Task requests no-network but the SkyPilot provider does not "
+                "enforce it (no FQDN allow layer); sandbox egress stays open"
+            )
         memory_gb = (
             self._effective_memory_mb / 1024
             if self._effective_memory_mb is not None
