@@ -566,6 +566,7 @@ class MiniSweAgent(BaseInstalledAgent):
         "google": [".googleapis.com"],
         "groq": ["api.groq.com"],
         "mistral": ["api.mistral.ai"],
+        "moonshot": ["api.moonshot.ai"],
         "openai": ["api.openai.com"],
         "openrouter": ["openrouter.ai"],
         "vertex_ai": [".googleapis.com"],
@@ -707,6 +708,7 @@ mini-swe-agent --help
             "OPENAI_API_BASE",
             "ANTHROPIC_BASE_URL",
             "GEMINI_API_BASE",
+            "MOONSHOT_API_BASE",
             "OPENROUTER_API_BASE",
         ):
             if value := self._get_env(key):

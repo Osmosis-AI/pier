@@ -92,6 +92,25 @@ def test_mini_swe_reports_provider_env_base_urls(tmp_path: Path):
     assert {".googleapis.com", "endpoint.respan.ai"} <= domains(agent)
 
 
+def test_mini_swe_reports_default_moonshot_domain(tmp_path: Path):
+    agent = MiniSweAgent(
+        logs_dir=tmp_path,
+        model_name="moonshot/kimi-k2.7-code",
+    )
+
+    assert "api.moonshot.ai" in domains(agent)
+
+
+def test_mini_swe_reports_custom_moonshot_base_url(tmp_path: Path):
+    agent = MiniSweAgent(
+        logs_dir=tmp_path,
+        model_name="moonshot/kimi-k2.7-code",
+        extra_env={"MOONSHOT_API_BASE": "https://api.moonshot.cn/v1"},
+    )
+
+    assert {"api.moonshot.ai", "api.moonshot.cn"} <= domains(agent)
+
+
 def test_mini_swe_reports_config_yaml_base_url(tmp_path: Path):
     agent = MiniSweAgent(
         logs_dir=tmp_path,
