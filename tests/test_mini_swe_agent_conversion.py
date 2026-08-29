@@ -91,17 +91,66 @@ async def test_mini_swe_uploads_and_uses_runtime_agent(tmp_path: Path):
 
     source, target = environment.uploaded[0]
     assert Path(source).name == "mini_swe_agent_runtime.py"
-    assert target == "/installed-agent/pier_minisweagent.py"
+    assert target == "/opt/pier-mini-swe-runtime/pier_minisweagent.py"
+    secure_dir_call = environment.exec_calls[1]["command"]
+    assert environment.exec_calls[1]["user"] == "root"
+    assert "rm -rf -- /opt/pier-mini-swe-runtime" in secure_dir_call
+    assert "mkdir -p -- /opt/pier-mini-swe-runtime" in secure_dir_call
+    assert "chown root:root -- /opt/pier-mini-swe-runtime" in secure_dir_call
+    assert "chmod 0755 -- /opt/pier-mini-swe-runtime" in secure_dir_call
+    secure_file_call = environment.exec_calls[2]["command"]
+    assert environment.exec_calls[2]["user"] == "root"
+    assert (
+        "chown root:root -- /opt/pier-mini-swe-runtime/pier_minisweagent.py"
+        in secure_file_call
+    )
+    assert (
+        "chmod 0644 -- /opt/pier-mini-swe-runtime/pier_minisweagent.py"
+        in secure_file_call
+    )
     run_call = environment.exec_calls[-1]
     assert (
         "--agent-class=pier_minisweagent.SubmittedResultInteractiveAgent"
         in run_call["command"]
     )
-    assert (
-        'export PYTHONPATH="/installed-agent${PYTHONPATH:+:$PYTHONPATH}"'
-        in run_call["command"]
+    assert run_call["command"].startswith(
+        'set -o pipefail; export PYTHONPATH="/opt/pier-mini-swe-runtime"; '
+        '. "$HOME/.local/bin/env"; '
     )
     assert run_call["env"]["PYTHONPATH"] == "/task/python"
+
+
+@pytest.mark.parametrize("config_source", ["yaml", "file"])
+@pytest.mark.parametrize(
+    "agent_class_config",
+    ["custom.module.CustomAgent", ""],
+    ids=["custom", "null"],
+)
+@pytest.mark.asyncio
+async def test_mini_swe_respects_custom_agent_class(
+    tmp_path: Path, config_source: str, agent_class_config: str
+):
+    config = f"agent:\n  agent_class: {agent_class_config}\n"
+    kwargs = {"config_yaml": config}
+    if config_source == "file":
+        config_path = tmp_path / "mini.yaml"
+        config_path.write_text(config)
+        kwargs = {"config_file": str(config_path)}
+    agent = MiniSweAgent(
+        logs_dir=tmp_path,
+        model_name="openai/gpt-5.5",
+        extra_env={"OPENAI_API_KEY": "test-key", "PYTHONPATH": "/image/python"},
+        **kwargs,
+    )
+    environment = FakeEnvironment()
+
+    await agent.run("Fix the bug", cast(BaseEnvironment, environment), AgentContext())
+
+    run_call = environment.exec_calls[-1]
+    assert "--agent-class=" not in run_call["command"]
+    assert "export PYTHONPATH=" not in run_call["command"]
+    assert run_call["env"]["PYTHONPATH"] == "/image/python"
+    assert "-c /tmp/mswea-config/custom.yaml" in run_call["command"]
 
 
 def test_mini_swe_cost_limit_zero_is_config_override(tmp_path: Path):
