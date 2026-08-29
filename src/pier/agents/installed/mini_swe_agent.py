@@ -38,6 +38,12 @@ from pier.utils.trajectory_metrics import (
 )
 
 
+_DEFAULT_VERSION = "2.4.6"
+_AGENT_MODULE_DIR = "/opt/pier-mini-swe-runtime"
+_AGENT_MODULE_PATH = f"{_AGENT_MODULE_DIR}/pier_minisweagent.py"
+_AGENT_CLASS = "pier_minisweagent.SubmittedResultInteractiveAgent"
+
+
 def _normalize_content(raw_content: Any) -> str:
     """Normalize message content which may be a string, list of parts, or None."""
     if raw_content is None:
@@ -584,9 +590,19 @@ class MiniSweAgent(BaseInstalledAgent):
         config_yaml: str | None = None,
         config_file: str | None = None,
         *args,
+        version: str | None = _DEFAULT_VERSION,
         **kwargs,
     ):
-        super().__init__(*args, **kwargs)
+        if (
+            not isinstance(version, str)
+            or not version
+            or version.split(".", 1)[0] != "2"
+        ):
+            raise ValueError(
+                "Pier's bundled mini-swe-agent runtime requires a non-empty "
+                f"2.x version; got version={version!r}"
+            )
+        super().__init__(*args, version=version, **kwargs)
         self._cost_limit = cost_limit
         self._reasoning_effort = reasoning_effort
         self._model_class = model_class
@@ -596,6 +612,21 @@ class MiniSweAgent(BaseInstalledAgent):
         self._config_yaml = config_yaml
         if config_file:
             self._config_yaml = Path(config_file).read_text()
+        self._has_custom_agent_class = False
+        if self._config_yaml:
+            try:
+                parsed_config = yaml.safe_load(self._config_yaml) or {}
+            except yaml.YAMLError:
+                pass
+            else:
+                agent_config = (
+                    parsed_config.get("agent", {})
+                    if isinstance(parsed_config, dict)
+                    else {}
+                )
+                self._has_custom_agent_class = (
+                    isinstance(agent_config, dict) and "agent_class" in agent_config
+                )
 
     @staticmethod
     def name() -> str:
@@ -622,7 +653,7 @@ class MiniSweAgent(BaseInstalledAgent):
         return list(dict.fromkeys(packages))
 
     def install_spec(self) -> AgentInstallSpec:
-        version_spec = f"=={self._version}" if self._version else ""
+        package_spec = shlex.quote(f"mini-swe-agent=={self._version}")
         install_extra_packages = ""
         if self._install_python_packages:
             packages = " ".join(
@@ -651,7 +682,7 @@ if ! grep -q 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.bashrc" 2>/dev/null;
   echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
 fi
 source "$HOME/.local/bin/env"
-uv tool install mini-swe-agent{version_spec}
+uv tool install {package_spec}
 
 python_bin="$(head -n 1 "$(command -v mini-swe-agent)" | sed 's/^#!//')"
 {install_extra_packages}
@@ -728,6 +759,23 @@ mini-swe-agent --help
         return allowlist_from_urls(
             urls,
             default_domains=self._DEFAULT_PROVIDER_DOMAINS.get(provider or "", []),
+        )
+
+    async def setup(self, environment: BaseEnvironment) -> None:
+        await super().setup(environment)
+        await self.exec_as_root(
+            environment,
+            f"rm -rf -- {_AGENT_MODULE_DIR} && "
+            f"mkdir -p -- {_AGENT_MODULE_DIR} && "
+            f"chown root:root -- {_AGENT_MODULE_DIR} && "
+            f"chmod 0755 -- {_AGENT_MODULE_DIR}",
+        )
+        agent_module = Path(__file__).with_name("mini_swe_agent_runtime.py")
+        await environment.upload_file(agent_module, _AGENT_MODULE_PATH)
+        await self.exec_as_root(
+            environment,
+            f"chown root:root -- {_AGENT_MODULE_PATH} && "
+            f"chmod 0644 -- {_AGENT_MODULE_PATH}",
         )
 
     @property
@@ -875,6 +923,14 @@ mini-swe-agent --help
 
         cli_flags = self.build_cli_flags()
         extra_flags = (cli_flags + " ") if cli_flags else ""
+        agent_class_flag = (
+            "" if self._has_custom_agent_class else f"--agent-class={_AGENT_CLASS} "
+        )
+        pythonpath_export = (
+            ""
+            if self._has_custom_agent_class
+            else f'export PYTHONPATH="{_AGENT_MODULE_DIR}"; '
+        )
         custom_config_path = None
 
         # Write custom config into the container if provided
@@ -894,8 +950,10 @@ mini-swe-agent --help
         await self.exec_as_agent(
             environment,
             command=(
+                f"{pythonpath_export}"
                 '. "$HOME/.local/bin/env"; '
-                f"mini-swe-agent --yolo --model={run_model_name} --task={escaped_instruction} "
+                f"mini-swe-agent --yolo {agent_class_flag}"
+                f"--model={run_model_name} --task={escaped_instruction} "
                 f"--output={self._mini_swe_agent_trajectory_path} {extra_flags}"
                 f"{config_flags}"
                 f"--exit-immediately 2>&1 </dev/null | tee /logs/agent/mini-swe-agent.txt"

@@ -1,9 +1,31 @@
 from pathlib import Path
+from typing import Any, cast
+
+import pytest
 
 from pier.agents.installed.mini_swe_agent import (
     MiniSweAgent,
     convert_mini_swe_agent_to_atif,
 )
+from pier.environments.base import BaseEnvironment, ExecResult
+from pier.models.agent.context import AgentContext
+
+
+class FakeEnvironment:
+    def __init__(self, *, agent_install_spec: Any = None) -> None:
+        self.agent_install_spec = agent_install_spec
+        self.exec_calls: list[dict[str, Any]] = []
+        self.uploaded: list[tuple[Path | str, str]] = []
+
+    def agent_process_env(self, env: dict[str, str] | None) -> dict[str, str] | None:
+        return env
+
+    async def exec(self, **kwargs: Any) -> ExecResult:
+        self.exec_calls.append(kwargs)
+        return ExecResult(return_code=0, stdout="", stderr="")
+
+    async def upload_file(self, source_path: Path | str, target_path: str) -> None:
+        self.uploaded.append((source_path, target_path))
 
 
 def test_mini_swe_install_refreshes_litellm_cost_map_backup(tmp_path: Path):
@@ -11,9 +33,124 @@ def test_mini_swe_install_refreshes_litellm_cost_map_backup(tmp_path: Path):
 
     spec = agent.install_spec()
 
+    assert spec.version == "2.4.6"
+    assert "uv tool install mini-swe-agent==2.4.6" in spec.steps[-1].run
     assert spec.steps[-1].env == {"LITELLM_LOCAL_MODEL_COST_MAP": "true"}
     assert MiniSweAgent._LITELLM_MODEL_COST_MAP_URL in spec.steps[-1].run
     assert "model_prices_and_context_window_backup.json" in spec.steps[-1].run
+
+
+def test_mini_swe_explicit_version_overrides_default(tmp_path: Path):
+    agent = MiniSweAgent(
+        logs_dir=tmp_path,
+        model_name="openai/gpt-5.5",
+        version="2.3.0",
+    )
+
+    spec = agent.install_spec()
+
+    assert spec.version == "2.3.0"
+    assert "uv tool install mini-swe-agent==2.3.0" in spec.steps[-1].run
+
+
+@pytest.mark.parametrize("version", [None, "", "1.14.1"])
+def test_mini_swe_rejects_incompatible_runtime_version(
+    tmp_path: Path, version: str | None
+):
+    with pytest.raises(ValueError, match="requires a non-empty 2.x version"):
+        MiniSweAgent(
+            logs_dir=tmp_path,
+            model_name="openai/gpt-5.5",
+            version=version,
+        )
+
+
+def test_mini_swe_quotes_explicit_version_in_install_command(tmp_path: Path):
+    agent = MiniSweAgent(
+        logs_dir=tmp_path,
+        model_name="openai/gpt-5.5",
+        version="2.4.6; echo unsafe",
+    )
+
+    install_command = agent.install_spec().steps[-1].run
+
+    assert "uv tool install 'mini-swe-agent==2.4.6; echo unsafe'" in install_command
+
+
+@pytest.mark.asyncio
+async def test_mini_swe_uploads_and_uses_runtime_agent(tmp_path: Path):
+    agent = MiniSweAgent(
+        logs_dir=tmp_path,
+        model_name="openai/gpt-5.5",
+        extra_env={"OPENAI_API_KEY": "test-key", "PYTHONPATH": "/task/python"},
+    )
+    environment = FakeEnvironment(agent_install_spec=agent.install_spec())
+
+    await agent.setup(cast(BaseEnvironment, environment))
+    await agent.run("Fix the bug", cast(BaseEnvironment, environment), AgentContext())
+
+    source, target = environment.uploaded[0]
+    assert Path(source).name == "mini_swe_agent_runtime.py"
+    assert target == "/opt/pier-mini-swe-runtime/pier_minisweagent.py"
+    secure_dir_call = environment.exec_calls[1]["command"]
+    assert environment.exec_calls[1]["user"] == "root"
+    assert "rm -rf -- /opt/pier-mini-swe-runtime" in secure_dir_call
+    assert "mkdir -p -- /opt/pier-mini-swe-runtime" in secure_dir_call
+    assert "chown root:root -- /opt/pier-mini-swe-runtime" in secure_dir_call
+    assert "chmod 0755 -- /opt/pier-mini-swe-runtime" in secure_dir_call
+    secure_file_call = environment.exec_calls[2]["command"]
+    assert environment.exec_calls[2]["user"] == "root"
+    assert (
+        "chown root:root -- /opt/pier-mini-swe-runtime/pier_minisweagent.py"
+        in secure_file_call
+    )
+    assert (
+        "chmod 0644 -- /opt/pier-mini-swe-runtime/pier_minisweagent.py"
+        in secure_file_call
+    )
+    run_call = environment.exec_calls[-1]
+    assert (
+        "--agent-class=pier_minisweagent.SubmittedResultInteractiveAgent"
+        in run_call["command"]
+    )
+    assert run_call["command"].startswith(
+        'set -o pipefail; export PYTHONPATH="/opt/pier-mini-swe-runtime"; '
+        '. "$HOME/.local/bin/env"; '
+    )
+    assert run_call["env"]["PYTHONPATH"] == "/task/python"
+
+
+@pytest.mark.parametrize("config_source", ["yaml", "file"])
+@pytest.mark.parametrize(
+    "agent_class_config",
+    ["custom.module.CustomAgent", ""],
+    ids=["custom", "null"],
+)
+@pytest.mark.asyncio
+async def test_mini_swe_respects_custom_agent_class(
+    tmp_path: Path, config_source: str, agent_class_config: str
+):
+    config = f"agent:\n  agent_class: {agent_class_config}\n"
+    kwargs = {"config_yaml": config}
+    if config_source == "file":
+        config_path = tmp_path / "mini.yaml"
+        config_path.write_text(config)
+        kwargs = {"config_file": str(config_path)}
+    agent = MiniSweAgent(
+        logs_dir=tmp_path,
+        model_name="openai/gpt-5.5",
+        extra_env={"OPENAI_API_KEY": "test-key", "PYTHONPATH": "/image/python"},
+        **kwargs,
+    )
+    environment = FakeEnvironment()
+
+    await agent.run("Fix the bug", cast(BaseEnvironment, environment), AgentContext())
+
+    run_call = environment.exec_calls[-1]
+    assert "--agent-class=" not in run_call["command"]
+    assert "export PYTHONPATH=" not in run_call["command"]
+    assert run_call["env"]["PYTHONPATH"] == "/image/python"
+    assert "-c /tmp/mswea-config/custom.yaml" in run_call["command"]
 
 
 def test_mini_swe_cost_limit_zero_is_config_override(tmp_path: Path):
@@ -194,9 +331,7 @@ def test_convert_chat_message_keeps_reasoning_separate_from_visible_content():
             "info": {
                 "mini_version": "2.2.8",
                 "model_stats": {"instance_cost": 0.01, "api_calls": 1},
-                "config": {
-                    "model": {"model_name": "anthropic/claude-opus-4-7"}
-                },
+                "config": {"model": {"model_name": "anthropic/claude-opus-4-7"}},
             },
             "messages": [
                 {"role": "system", "content": "system"},
@@ -241,9 +376,7 @@ def test_convert_openrouter_byok_uses_upstream_cost_details():
             "info": {
                 "mini_version": "2.2.8",
                 "model_stats": {"instance_cost": 0.0, "api_calls": 1},
-                "config": {
-                    "model": {"model_name": "moonshotai/kimi-k2.6"}
-                },
+                "config": {"model": {"model_name": "moonshotai/kimi-k2.6"}},
             },
             "messages": [
                 {"role": "system", "content": "system"},
