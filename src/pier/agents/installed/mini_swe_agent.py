@@ -38,6 +38,11 @@ from pier.utils.trajectory_metrics import (
 )
 
 
+_DEFAULT_VERSION = "2.4.6"
+_AGENT_MODULE_PATH = "/installed-agent/pier_minisweagent.py"
+_AGENT_CLASS = "pier_minisweagent.SubmittedResultInteractiveAgent"
+
+
 def _normalize_content(raw_content: Any) -> str:
     """Normalize message content which may be a string, list of parts, or None."""
     if raw_content is None:
@@ -584,9 +589,19 @@ class MiniSweAgent(BaseInstalledAgent):
         config_yaml: str | None = None,
         config_file: str | None = None,
         *args,
+        version: str | None = _DEFAULT_VERSION,
         **kwargs,
     ):
-        super().__init__(*args, **kwargs)
+        if (
+            not isinstance(version, str)
+            or not version
+            or version.split(".", 1)[0] != "2"
+        ):
+            raise ValueError(
+                "Pier's bundled mini-swe-agent runtime requires a non-empty "
+                f"2.x version; got version={version!r}"
+            )
+        super().__init__(*args, version=version, **kwargs)
         self._cost_limit = cost_limit
         self._reasoning_effort = reasoning_effort
         self._model_class = model_class
@@ -622,7 +637,7 @@ class MiniSweAgent(BaseInstalledAgent):
         return list(dict.fromkeys(packages))
 
     def install_spec(self) -> AgentInstallSpec:
-        version_spec = f"=={self._version}" if self._version else ""
+        package_spec = shlex.quote(f"mini-swe-agent=={self._version}")
         install_extra_packages = ""
         if self._install_python_packages:
             packages = " ".join(
@@ -651,7 +666,7 @@ if ! grep -q 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.bashrc" 2>/dev/null;
   echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
 fi
 source "$HOME/.local/bin/env"
-uv tool install mini-swe-agent{version_spec}
+uv tool install {package_spec}
 
 python_bin="$(head -n 1 "$(command -v mini-swe-agent)" | sed 's/^#!//')"
 {install_extra_packages}
@@ -729,6 +744,12 @@ mini-swe-agent --help
             urls,
             default_domains=self._DEFAULT_PROVIDER_DOMAINS.get(provider or "", []),
         )
+
+    async def setup(self, environment: BaseEnvironment) -> None:
+        await super().setup(environment)
+        agent_module = Path(__file__).with_name("mini_swe_agent_runtime.py")
+        await environment.upload_file(agent_module, _AGENT_MODULE_PATH)
+        await self.exec_as_root(environment, f"chmod a+r {_AGENT_MODULE_PATH}")
 
     @property
     def _mini_swe_agent_trajectory_path(self) -> PurePosixPath:
@@ -895,7 +916,9 @@ mini-swe-agent --help
             environment,
             command=(
                 '. "$HOME/.local/bin/env"; '
-                f"mini-swe-agent --yolo --model={run_model_name} --task={escaped_instruction} "
+                'export PYTHONPATH="/installed-agent${PYTHONPATH:+:$PYTHONPATH}"; '
+                f"mini-swe-agent --yolo --agent-class={_AGENT_CLASS} "
+                f"--model={run_model_name} --task={escaped_instruction} "
                 f"--output={self._mini_swe_agent_trajectory_path} {extra_flags}"
                 f"{config_flags}"
                 f"--exit-immediately 2>&1 </dev/null | tee /logs/agent/mini-swe-agent.txt"
