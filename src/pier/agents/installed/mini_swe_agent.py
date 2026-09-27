@@ -790,10 +790,20 @@ mini-swe-agent --help
 
     @property
     def _model_class_override(self) -> str | None:
+        """LitellmResponseModel needs the OpenAI Responses API.
+
+        An ``openai/`` model behind a configured OPENAI_BASE_URL keeps the
+        default model class, matching Harbor's port of this adapter: hosted and
+        endpoint models route through litellm's openai provider at OpenAI-
+        compatible servers that may not serve /v1/responses (deployed LoRA
+        endpoints 404 there), while plain OpenAI keys have no base URL.
+        """
         if self._model_class != "auto":
             return self._model_class
         if self.model_name and self.model_name.startswith("openai/"):
-            return "litellm_response"
+            if not self._get_env("OPENAI_BASE_URL"):
+                return "litellm_response"
+            return None
         if self.model_name and self.model_name.startswith("openrouter/"):
             return "openrouter"
         return None
