@@ -176,6 +176,16 @@ def test_mini_swe_openai_uses_responses_model_class(tmp_path: Path):
     assert "-c model.model_kwargs.reasoning_effort=xhigh" in config_flags
 
 
+def test_mini_swe_openai_behind_base_url_keeps_default_model_class(tmp_path: Path):
+    agent = MiniSweAgent(
+        logs_dir=tmp_path,
+        model_name="openai/Qwen/Qwen3-4B:my-lora",
+        extra_env={"OPENAI_BASE_URL": "https://inference.example.com/v1"},
+    )
+
+    assert "model.model_class" not in agent._build_config_flags()
+
+
 def test_mini_swe_model_class_can_be_overridden(tmp_path: Path):
     agent = MiniSweAgent(
         logs_dir=tmp_path,
