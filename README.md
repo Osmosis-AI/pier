@@ -60,6 +60,8 @@ Trials land under `jobs/<timestamp_or_name>/<trial_id>/`. See `pier run --help`,
 
 Use `agent.model_name` for trial metadata, `agent.env` for runtime env vars, and agent-specific `kwargs` for tool config. Pier's network allowlist also reads URLs out of those configs (Codex `config_toml`, OpenCode `opencode_config`, mini-swe `config_yaml`), so any base URL you set is allowlisted without code changes.
 
+Use repeatable `--allow-agent-host <hostname>` (or `agents[].extra_allowed_hosts` in a job config) to add the selected inference endpoint when the agent does not declare it. These hosts merge with the agent's existing allowlist for restricted tasks and survive job resume; they do not change a separate verifier environment. Pass hostnames, not URLs. Public-network tasks remain public.
+
 A few things we've learned plumbing this through Respan and OpenRouter:
 
 **Claude Code** routes through the Anthropic face from Respan. Plan mode is disabled by default (`--disallowedTools EnterPlanMode`).

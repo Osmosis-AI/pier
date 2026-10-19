@@ -14,6 +14,7 @@ from pydantic import (
 from shortuuid import ShortUUID
 
 from pier.models.agent.name import AgentName
+from pier.models.agent.network import NetworkAllowlist
 from pier.models.environment_type import EnvironmentType
 from pier.models.task.config import ArtifactConfig
 from pier.models.task.id import GitTaskId, LocalTaskId, PackageTaskId
@@ -54,11 +55,17 @@ class AgentConfig(BaseModel):
     name: str | None = None
     import_path: str | None = None
     model_name: str | None = None
+    extra_allowed_hosts: list[str] = Field(default_factory=list)
     override_timeout_sec: float | None = None
     override_setup_timeout_sec: float | None = None
     max_timeout_sec: float | None = None
     kwargs: dict[str, Any] = Field(default_factory=dict)
     env: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("extra_allowed_hosts")
+    @classmethod
+    def _normalize_allowed_hosts(cls, hosts: list[str]) -> list[str]:
+        return NetworkAllowlist(domains=hosts).domains
 
     @field_serializer("env")
     @classmethod

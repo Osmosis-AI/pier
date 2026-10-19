@@ -14,6 +14,7 @@ from typer import Option, Typer
 from pier.cli.host_env import confirm_host_env_access
 from pier.cli.utils import parse_env_vars, parse_kwargs, run_async
 from pier.models.agent.name import AgentName
+from pier.models.agent.network import NetworkAllowlist
 from pier.models.environment_type import EnvironmentType
 from pier.models.job.config import (
     DatasetConfig,
@@ -345,6 +346,14 @@ def start(
             show_default=False,
         ),
     ] = None,
+    allow_agent_host: Annotated[
+        list[str] | None,
+        Option(
+            "--allow-agent-host",
+            help="Add an agent runtime host even for no-network tasks (repeatable).",
+            rich_help_panel="Agent",
+        ),
+    ] = None,
     agent_env: Annotated[
         list[str] | None,
         Option(
@@ -666,6 +675,12 @@ def start(
                     agent.kwargs.update(parsed_kwargs)
                 if parsed_env:
                     agent.env.update(parsed_env)
+
+    if allow_agent_host:
+        for agent in config.agents:
+            agent.extra_allowed_hosts = NetworkAllowlist(
+                domains=[*agent.extra_allowed_hosts, *allow_agent_host]
+            ).domains
 
     if environment_type is not None:
         config.environment.type = environment_type

@@ -17,6 +17,7 @@ from pier.environments.base import BaseEnvironment
 from pier.environments.factory import EnvironmentFactory
 from pier.models.agent.context import AgentContext
 from pier.models.agent.name import AgentName
+from pier.models.agent.network import NetworkAllowlist
 from pier.models.task.config import TaskOS
 from pier.models.task.task import Task
 from pier.models.trial.config import AgentConfig, EnvironmentConfig
@@ -80,6 +81,7 @@ class TrialExecution:
             trial_paths=trial_paths,
             logger=logger,
             agent=agent,
+            agent_config=agent_config,
         )
         return cls(
             task=task,
@@ -189,7 +191,16 @@ class TrialExecution:
         trial_paths: TrialPaths,
         logger: Logger,
         agent,
+        agent_config: AgentConfig,
     ) -> BaseEnvironment:
+        network_allowlist = agent.network_allowlist()
+        if agent_config.extra_allowed_hosts:
+            network_allowlist = NetworkAllowlist(
+                domains=[
+                    *(network_allowlist.domains if network_allowlist else []),
+                    *agent_config.extra_allowed_hosts,
+                ]
+            )
         return EnvironmentFactory.create_environment_from_config(
             config=environment_config,
             environment_dir=task.paths.environment_dir,
@@ -199,7 +210,7 @@ class TrialExecution:
             task_env_config=task.config.environment,
             logger=logger,
             agent_install_spec=agent.install_spec(),
-            network_allowlist=agent.network_allowlist(),
+            network_allowlist=network_allowlist,
             default_user=task.config.agent.user,
         )
 
